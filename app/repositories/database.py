@@ -21,4 +21,7 @@ def create_tables():
     Base.metadata.create_all(bind=engine)
     print("Tabelas criadas com sucesso!")
 
+def get_db():
+    with Session() as session:
+        yield session
 
