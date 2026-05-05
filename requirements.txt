@@ -4,3 +4,4 @@ openai
 pydantic-settings
 uvicorn
 psycopg2-binary
+pypdf

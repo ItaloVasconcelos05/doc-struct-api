@@ -2,6 +2,7 @@ import json
 from sqlalchemy.orm import Session as DBSession
 from openai import OpenAI
 from pathlib import Path
+from pypdf import PdfReader
 from app.repositories.database import Session
 from app.models.documents import Document, DocumentStatus, ExtractedEntity
 from app.config import settings
@@ -32,8 +33,24 @@ FORMATO DE SAÍDA:
 ]
 }
 """
+def extract_text(file_path: Path) -> str:
+    if file_path.suffix == ".txt":
+        return file_path.read_text(encoding="utf-8")
+    
+    elif file_path.suffix == ".pdf":
+        reader = PdfReader(file_path)
+        extracted_pages = []
 
+        for num_page, page in enumerate(reader.pages):
+            text = page.extract_text()
 
+            if text:
+                extracted_pages.append(text)
+
+        if not extracted_pages:
+            raise ValueError(f"Nenhum texto extraível encontrado em {file_path.name}")
+        return "\n\n".join(extracted_pages)
+    
 def extraction_service(db: DBSession):
 
     client = OpenAI(
@@ -43,14 +60,13 @@ def extraction_service(db: DBSession):
 
 
     pending_documents = db.query(Document).filter_by(status=DocumentStatus.PENDING).all()
-    print(f"DEBUG: encontrou {len(pending_documents)} documentos pendentes")
     processed_count = 0
     failed_count = 0
 
     for doc in pending_documents:
         try:
             doc_path = Path(doc.file_path)
-            doc_text =Path(doc_path).read_text(encoding="utf-8")
+            doc_text = extract_text(doc_path)
 
             response = client.chat.completions.create(
                 model = settings.LLM_MODEL,
@@ -87,8 +103,6 @@ def extraction_service(db: DBSession):
             processed_count += 1
         except Exception as e:
             db.rollback()
-            import traceback
-            traceback.print_exc()
             stmt = update(Document).where(Document.id == doc.id).values(status = DocumentStatus.FAILED)
             db.execute(stmt)
             db.commit()

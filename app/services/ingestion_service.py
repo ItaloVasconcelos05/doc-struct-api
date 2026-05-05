@@ -10,8 +10,13 @@ def ingest_documents(directory: str):
     inserted_count = 0
     skipped_files = 0
 
+    SUPPORTED_EXTENSIONS = {".txt", ".pdf"}
+
     with Session() as session:
-        for doc_path in source_path.glob("*.txt"):
+        for doc_path in source_path.iterdir():
+            if doc_path.suffix not in SUPPORTED_EXTENSIONS:
+                continue
+
             stmt = select(Document).where(Document.file_path == str(doc_path))
             existing_doc = session.execute(stmt).scalars().first()
 
