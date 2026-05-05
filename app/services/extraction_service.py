@@ -1,5 +1,5 @@
-import os
 import json
+from sqlalchemy.orm import Session as DBSession
 from openai import OpenAI
 from pathlib import Path
 from app.repositories.database import Session
@@ -34,55 +34,69 @@ FORMATO DE SAÍDA:
 """
 
 
-def extraction_service():
+def extraction_service(db: DBSession):
 
     client = OpenAI(
         api_key=settings.OPENROUTER_API_KEY,
         base_url=settings.OPENROUTER_BASE_URL
     )
 
-    with Session() as session:
-        pending_documents = session.query(Document).filter_by(status=DocumentStatus.PENDING).all()
 
-        for doc in pending_documents:
-            try:
-                doc_path = Path(doc.file_path)
-                doc_text =Path(doc_path).read_text(encoding="utf-8")
+    pending_documents = db.query(Document).filter_by(status=DocumentStatus.PENDING).all()
+    print(f"DEBUG: encontrou {len(pending_documents)} documentos pendentes")
+    processed_count = 0
+    failed_count = 0
 
-                response = client.chat.completions.create(
-                    model = settings.LLM_MODEL,
-                    messages=[
-                        {
-                            "role": "system",
-                            "content": prompt
-                        },
-                        {
-                            "role": "user", 
-                            "content": f"TEXTO PARA ANÁLISE:\n\n{doc_text}"},
-                    ],
-                    response_format={"type": "json_object"}
+    for doc in pending_documents:
+        try:
+            doc_path = Path(doc.file_path)
+            doc_text =Path(doc_path).read_text(encoding="utf-8")
+
+            response = client.chat.completions.create(
+                model = settings.LLM_MODEL,
+                messages=[
+                    {
+                        "role": "system",
+                        "content": prompt
+                    },
+                    {
+                        "role": "user", 
+                        "content": f"TEXTO PARA ANÁLISE:\n\n{doc_text}"},
+                ],
+                response_format={"type": "json_object"}
+            )
+
+            raw_content = response.choices[0].message.content
+
+            data = json.loads(raw_content)
+            entities = data.get("entities", [])
+
+            for ent in entities:
+
+                extracted_entity = ExtractedEntity(
+                    document_id = doc.id,
+                    entity_type = ent["entity_type"],
+                    entity_value = ent["entity_value"],
+                    confidence = ent["confidence"]
                 )
+                db.add(extracted_entity)
+            stmt = update(Document).where(Document.id == doc.id).values(status = DocumentStatus.COMPLETED)
+            db.execute(stmt)
+            db.commit()
 
-                raw_content = response.choices[0].message.content
+            processed_count += 1
+        except Exception as e:
+            db.rollback()
+            import traceback
+            traceback.print_exc()
+            stmt = update(Document).where(Document.id == doc.id).values(status = DocumentStatus.FAILED)
+            db.execute(stmt)
+            db.commit()
 
-                data = json.loads(raw_content)
-                entities = data.get("entities", [])
+            failed_count += 1
 
-                for ent in entities:
-
-                    extracted_entity = ExtractedEntity(
-                        document_id = doc.id,
-                        entity_type = ent["entity_type"],
-                        entity_value = ent["entity_value"],
-                        confidence = ent["confidence"]
-                    )
-                    session.add(extracted_entity)
-                stmt = update(Document).where(Document.id == doc.id).values(status = DocumentStatus.COMPLETED)
-                session.execute(stmt)
-                session.commit()
-
-            except Exception as e:
-                session.rollback()
-                stmt = update(Document).where(Document.id == doc.id).values(status = DocumentStatus.FAILED)
-                session.execute(stmt)
-                session.commit()
+    return {
+        "message": "Processamento de extração finalizado",
+        "processed": processed_count,
+        "failed": failed_count
+    }

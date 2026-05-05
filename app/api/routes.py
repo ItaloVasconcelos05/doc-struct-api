@@ -40,4 +40,4 @@ def ingest(request: IngestRequest,db: DBSession = Depends(get_db)):
 
 @router.post("/process")
 def process_documents(db: DBSession = Depends(get_db)):
-    return extraction_service()
+    return extraction_service(db)
